@@ -16,10 +16,14 @@
 package com.atguigu.gmall.manage.service.impl;
 
 import com.alibaba.dubbo.config.annotation.Service;
+import com.alibaba.fastjson.JSON;
 import com.atguigu.gmall.bean.*;
 import com.atguigu.gmall.manage.mapper.*;
 import com.atguigu.gmall.service.SkuService;
+import com.atguigu.gmall.util.RedisUtil;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import redis.clients.jedis.Jedis;
 import tk.mybatis.mapper.entity.Example;
 
 import java.util.List;
@@ -47,6 +51,8 @@ public class SkuServiceImpl implements SkuService {
     PmsSkuImageMapper pmsSkuImageMapper;
     @Autowired
     PmsProductSaleAttrMapper pmsProductSaleAttrMapper;
+    @Autowired
+    RedisUtil redisUtil;
 
     @Override
     public void saveSkuInfo(PmsSkuInfo pmsSkuInfo) {
@@ -75,8 +81,9 @@ public class SkuServiceImpl implements SkuService {
         }
     }
 
-    @Override
-    public PmsSkuInfo getSkuById(String skuId) {
+
+
+    public PmsSkuInfo getSkuByIdFromDb(String skuId) {
 
         //sku的商品对象
         PmsSkuInfo pmsSkuInfo = new PmsSkuInfo();
@@ -89,6 +96,34 @@ public class SkuServiceImpl implements SkuService {
         List<PmsSkuImage> pmsSkuImages = pmsSkuImageMapper.select(pmsSkuImage);
         skuInfo.setSkuImageList(pmsSkuImages);
         return skuInfo;
+    }
+
+    @Override
+    public PmsSkuInfo getSkuById(String skuId) {
+        PmsSkuInfo pmsSkuInfo = new PmsSkuInfo();
+        //连接缓存
+        Jedis jedis = redisUtil.getJedis();
+
+        //查询缓存
+        String skuKey = "sku:" + skuId + ":info";
+        String skuJson = jedis.get(skuKey);
+        if (StringUtils.isNotBlank(skuJson)){
+            pmsSkuInfo = JSON.parseObject(skuJson, PmsSkuInfo.class);
+        }else{
+            //如果缓存中没有，查询mysql
+            pmsSkuInfo = getSkuByIdFromDb(skuId);
+            if (pmsSkuInfo != null){
+                //mysql查询结果存入redis
+                jedis.set("sku:" + skuId + ":info",JSON.toJSONString(pmsSkuInfo));
+            }else{
+                //数据中不存在该sku
+                //为了防止缓存穿透，null或者空字符串值设置给redis
+                jedis.setex("sku:"+skuId+":info",60*3,JSON.toJSONString(""));
+            }
+
+        }
+        jedis.close();
+        return pmsSkuInfo;
 //        PmsSkuInfo pmsSkuInfo = pmsSkuInfoMapper.selectByPrimaryKey(skuId);
 //        if (pmsSkuInfo == null) {
 //            return null;
@@ -114,6 +149,7 @@ public class SkuServiceImpl implements SkuService {
 //
 //        return pmsSkuInfo;
    }
+
 
     @Override
     public List<PmsSkuInfo> getSkuSaleAttrValueListBySpu(String productId) {
